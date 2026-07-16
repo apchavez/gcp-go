@@ -1,0 +1,503 @@
+openapi: 3.1.0
+info:
+  title: Clinic Scheduling Platform — GCP
+  version: 1.0.0
+  description: >
+    API for creating, listing, cancelling, rescheduling, and viewing the history of appointments.
+    Confirmation is performed asynchronously (Pub/Sub push subscription → Cloud Run worker →
+    Cloud SQL) and updates the status in Firestore to "completed." Cancel/reschedule enforce the
+    same insured-owns-their-data rule as create/list, and every state transition is recorded in an
+    event log readable via the history endpoint. Same domain and Clean Architecture as the AWS
+    TypeScript and Azure Python siblings - only the cloud/language changes.
+  contact:
+    name: Alexander Prieto Chavez
+    email: alexander.prieto.chavez@gmail.com
+    url: https://github.com/apchavez
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local (go run ./cmd/api)
+  - url: https://{service}-{hash}-{region}.run.app
+    description: GCP Cloud Run
+    variables:
+      service:
+        default: clinic-scheduling-api-dev
+      hash:
+        default: xxxxxxxxxx
+      region:
+        default: uc
+
+tags:
+  - name: Appointments
+    description: Appointment creation and consultation operations
+
+security:
+  - BearerAuth: []
+
+paths:
+  /appointments:
+    post:
+      tags: [Appointments]
+      operationId: createAppointment
+      summary: Create a new appointment (initial status "pending")
+      description: >
+        Creates an appointment with initial status "pending" and returns the created appointment object.
+        The `insured` role can only create appointments for their own `insuredId` (must match JWT `sub` claim).
+        The `agent` role can create appointments for any insuredId.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAppointmentRequest"
+            examples:
+              example:
+                value:
+                  insuredId: "01234"
+                  scheduleId: 100
+                  countryISO: "PE"
+                  contactEmail: "insured@example.com"
+      responses:
+        "201":
+          description: Appointment created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Appointment"
+              examples:
+                example:
+                  value:
+                    appointmentUuid: "8b2c1f2e-7c24-4a5a-9b4c-6d2e7b1a1b01"
+                    insuredId: "01234"
+                    scheduleId: 100
+                    countryISO: "PE"
+                    status: "pending"
+                    createdAt: "2025-09-13T14:12:00.000Z"
+                    updatedAt: "2025-09-13T14:12:00.000Z"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                missingFields:
+                  value:
+                    message: "insuredId, scheduleId and countryISO are required"
+                invalidInsuredId:
+                  value:
+                    message: "insuredId must be 5 digits"
+                invalidCountry:
+                  value:
+                    message: "countryISO must be 'PE' or 'CL'"
+        "403":
+          description: Missing or invalid Bearer token; or `insured` role attempted to act on behalf of another insuredId
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                accessDenied:
+                  value:
+                    message: "Access denied"
+                wrongInsured:
+                  value:
+                    message: "insured can only book appointments for themselves"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /appointments/{id}:
+    get:
+      tags: [Appointments]
+      operationId: listByInsured
+      summary: List appointments by insured
+      description: >
+        Returns a page of appointments (any status) for the given insuredId, newest first.
+        The `insured` role can only view their own appointments (insuredId must match JWT `sub` claim).
+        The `agent` role can view appointments for any insuredId.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Insured code (5 digits, with leading zeros if applicable)
+          schema:
+            type: string
+            pattern: '^\d{5}$'
+          example: "01234"
+        - in: query
+          name: pageSize
+          required: false
+          description: Items per page (default 20, max 100; invalid or out-of-range values fall back to the default)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - in: query
+          name: cursor
+          required: false
+          description: Opaque continuation token from a previous response's `nextCursor` — don't construct it yourself
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Page of insured appointments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppointmentPage"
+              examples:
+                example:
+                  value:
+                    items:
+                      - appointmentUuid: "8b2c1f2e-7c24-4a5a-9b4c-6d2e7b1a1b01"
+                        insuredId: "01234"
+                        scheduleId: 100
+                        countryISO: "PE"
+                        status: "completed"
+                        createdAt: "2025-09-13T14:12:00.000Z"
+                        updatedAt: "2025-09-13T14:12:05.000Z"
+                    nextCursor: null
+        "400":
+          description: Parameter validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                missingParam:
+                  value:
+                    message: "insuredId required"
+                invalidFormat:
+                  value:
+                    message: "insuredId must be 5 digits"
+        "403":
+          description: Missing or invalid Bearer token; or `insured` role attempted to view another insuredId's appointments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                accessDenied:
+                  value:
+                    message: "Access denied"
+                wrongInsured:
+                  value:
+                    message: "insured can only view their own appointments"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      tags: [Appointments]
+      operationId: cancelAppointment
+      summary: Cancel a pending appointment
+      description: >
+        Cancels a `pending` appointment. The `insured` role can only cancel their own appointments
+        (checked via a lookup before the state change); `agent` can cancel any appointment.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Appointment cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "Appointment cancelled" }
+                  appointmentUuid: { type: string, format: uuid }
+        "400":
+          description: Missing appointmentUuid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Missing/invalid Bearer token, or `insured` attempted to cancel another insured's appointment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Appointment not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: Appointment is not `pending`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /appointments/{id}/reschedule:
+    patch:
+      tags: [Appointments]
+      operationId: rescheduleAppointment
+      summary: Reschedule a pending appointment
+      description: >
+        Marks the existing `pending` appointment as `rescheduled` and creates a new `pending`
+        appointment for the new schedule slot, which flows through the same SNS → SQS →
+        country-worker → EventBridge pipeline as a fresh creation. Same ownership rule as cancel.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [newScheduleId]
+              properties:
+                newScheduleId: { type: integer, minimum: 1, example: 42 }
+      responses:
+        "202":
+          description: Appointment rescheduled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "Appointment rescheduled" }
+                  newAppointmentUuid: { type: string, format: uuid }
+                  newScheduleId: { type: integer }
+        "400":
+          description: Missing appointmentUuid, missing body, or invalid newScheduleId
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Missing/invalid Bearer token, or `insured` attempted to reschedule another insured's appointment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Appointment not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: Appointment is not `pending`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /appointments/{id}/history:
+    get:
+      tags: [Appointments]
+      operationId: getAppointmentHistory
+      summary: Get an appointment's full event history
+      description: >
+        Returns the full ordered event log for one appointment — every state transition recorded
+        by the lightweight event-sourcing layer. `insured` callers can only view their own
+        appointment's history (checked against the first returned event's insuredId).
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Ordered list of events (oldest first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AppointmentEvent"
+        "400":
+          description: Missing appointmentUuid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Missing/invalid Bearer token, or `insured` attempted to view another insured's history
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        HS256 JWT signed with the secret stored in SSM at /appointments/jwt/secret.
+        The payload must include a `role` claim: "agent" or "insured".
+        Roles: agent = full access to any insuredId;
+               insured = can only create/view their own appointments (sub must match insuredId).
+
+  schemas:
+    CreateAppointmentRequest:
+      type: object
+      required: [insuredId, scheduleId, countryISO]
+      properties:
+        insuredId:
+          type: string
+          description: Insured code (5 digits, with leading zeros if applicable)
+          pattern: '^\d{5}$'
+          example: "01234"
+        scheduleId:
+          type: integer
+          minimum: 1
+          description: >
+            Space identifier for scheduling. A "space" is the combination of
+            medical center, specialty, doctor, and date/time slot.
+          example: 100
+        countryISO:
+          type: string
+          description: Country identifier
+          enum: [PE, CL]
+          example: PE
+        contactEmail:
+          type: string
+          format: email
+          description: >
+            Optional. When present, carried through to cancel/reschedule/complete for best-effort
+            SES email notifications (only sent if SES_SENDER_ADDRESS is configured server-side).
+          example: "insured@example.com"
+
+    Appointment:
+      type: object
+      required:
+        - appointmentUuid
+        - insuredId
+        - scheduleId
+        - countryISO
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        appointmentUuid:
+          type: string
+          format: uuid
+          description: Unique appointment identifier
+          example: "8b2c1f2e-7c24-4a5a-9b4c-6d2e7b1a1b01"
+        insuredId:
+          type: string
+          description: Insured code (5 digits, with leading zeros if applicable)
+          pattern: '^\d{5}$'
+          example: "01234"
+        scheduleId:
+          type: integer
+          minimum: 1
+          description: Space identifier
+          example: 100
+        countryISO:
+          type: string
+          description: ISO country code
+          enum: [PE, CL]
+          example: PE
+        status:
+          type: string
+          description: Appointment status
+          enum: [pending, completed, cancelled, rescheduled]
+          example: pending
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp in ISO 8601 (UTC)
+          example: "2025-09-13T14:12:00.000Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last update timestamp in ISO 8601 (UTC)
+          example: "2025-09-13T14:12:00.000Z"
+        contactEmail:
+          type: string
+          format: email
+          description: Optional; present only if provided at creation
+          example: "insured@example.com"
+
+    AppointmentPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Appointment"
+        nextCursor:
+          type: [string, "null"]
+          description: Opaque continuation token; null when there are no more pages
+          example: null
+
+    AppointmentEvent:
+      type: object
+      required:
+        - eventId
+        - appointmentUuid
+        - eventType
+        - insuredId
+        - scheduleId
+        - countryISO
+        - status
+        - occurredAt
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        appointmentUuid:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+          enum: [APPOINTMENT_CREATED, APPOINTMENT_COMPLETED, APPOINTMENT_CANCELLED, APPOINTMENT_RESCHEDULED]
+        insuredId:
+          type: string
+          pattern: '^\d{5}$'
+        scheduleId:
+          type: integer
+        countryISO:
+          type: string
+          enum: [PE, CL]
+        status:
+          type: string
+          enum: [pending, completed, cancelled, rescheduled]
+        occurredAt:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          example: "Internal server error"

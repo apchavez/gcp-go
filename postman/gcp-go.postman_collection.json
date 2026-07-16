@@ -1,0 +1,627 @@
+{
+  "info": {
+    "_postman_id": "clinic-scheduling-platform-collection",
+    "name": "Clinic Scheduling Platform - GCP",
+    "description": "Postman collection for testing the Clinic Scheduling Platform API.\n\nAll endpoints require a Bearer JWT token. Set `agentToken` (role=agent) or `insuredToken` (role=insured) in the collection variables or via an active environment before running.\n\nGenerate tokens locally:\n```\nimport { signJwt } from './src/infra/jwt';\nconst secret = '<value from SSM /appointments/jwt/secret>';\nconst agentToken = signJwt('agent-001', 'agent', secret);\nconst insuredToken = signJwt('12345', 'insured', secret);\n```",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Appointments",
+      "item": [
+        {
+          "name": "Create Appointment - PE",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentToken}}",
+                "description": "HS256 JWT signed with SSM secret. Role 'agent' can create for any insuredId."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"insuredId\": \"12345\",\n  \"scheduleId\": 10,\n  \"countryISO\": \"PE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/appointments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "appointments"
+              ]
+            },
+            "description": "Creates a medical appointment for Peru. Returns the full Appointment object with status=pending."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201 Created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Content-Type is application/json', function () {",
+                  "    pm.expect(pm.response.headers.get('content-type')).to.include('application/json');",
+                  "});",
+                  "",
+                  "pm.test('Response contains a valid Appointment object', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.appointmentUuid).to.be.a('string').and.not.empty;",
+                  "    pm.expect(json.insuredId).to.eql('12345');",
+                  "    pm.expect(json.scheduleId).to.eql(10);",
+                  "    pm.expect(json.countryISO).to.eql('PE');",
+                  "    pm.expect(json.status).to.eql('pending');",
+                  "    pm.expect(json.createdAt).to.be.a('string').and.not.empty;",
+                  "    pm.expect(json.updatedAt).to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set('lastAppointmentUuid', pm.response.json().appointmentUuid);",
+                  "pm.collectionVariables.set('lastInsuredId', '12345');",
+                  "pm.collectionVariables.set('peAppointmentUuid', pm.response.json().appointmentUuid);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Appointment - CL",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentToken}}",
+                "description": "HS256 JWT signed with SSM secret. Role 'agent' can create for any insuredId."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"insuredId\": \"67890\",\n  \"scheduleId\": 20,\n  \"countryISO\": \"CL\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/appointments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "appointments"
+              ]
+            },
+            "description": "Creates a medical appointment for Chile. Returns the full Appointment object with status=pending."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201 Created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Content-Type is application/json', function () {",
+                  "    pm.expect(pm.response.headers.get('content-type')).to.include('application/json');",
+                  "});",
+                  "",
+                  "pm.test('Response contains a valid Appointment object', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.appointmentUuid).to.be.a('string').and.not.empty;",
+                  "    pm.expect(json.insuredId).to.eql('67890');",
+                  "    pm.expect(json.scheduleId).to.eql(20);",
+                  "    pm.expect(json.countryISO).to.eql('CL');",
+                  "    pm.expect(json.status).to.eql('pending');",
+                  "    pm.expect(json.createdAt).to.be.a('string').and.not.empty;",
+                  "    pm.expect(json.updatedAt).to.be.a('string').and.not.empty;",
+                  "});",
+                  "pm.collectionVariables.set('clAppointmentUuid', pm.response.json().appointmentUuid);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Appointments by Insured",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentToken}}",
+                "description": "Agent token can list any insuredId. Use insuredToken only if the sub matches the insuredId in the path."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/appointments/{{lastInsuredId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "appointments",
+                "{{lastInsuredId}}"
+              ],
+              "query": [
+                {
+                  "key": "pageSize",
+                  "value": "20",
+                  "description": "Items per page (default 20, max 100).",
+                  "disabled": true
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "description": "Opaque continuation token from a previous response's nextCursor.",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Returns a page of appointments for a given insuredId, newest first. Uses the insuredId saved by the last Create request. pageSize/cursor query params are optional and disabled by default."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Content-Type is application/json', function () {",
+                  "    pm.expect(pm.response.headers.get('content-type')).to.include('application/json');",
+                  "});",
+                  "",
+                  "pm.test('Response is a Page object with items[] and nextCursor', function () {",
+                  "    const page = pm.response.json();",
+                  "    pm.expect(page).to.have.property('items').that.is.an('array');",
+                  "    pm.expect(page).to.have.property('nextCursor');",
+                  "});",
+                  "",
+                  "pm.test('Each item has required Appointment fields', function () {",
+                  "    const items = pm.response.json().items;",
+                  "    items.forEach(function (item) {",
+                  "        pm.expect(item.appointmentUuid).to.be.a('string').and.not.empty;",
+                  "        pm.expect(item.insuredId).to.be.a('string').and.not.empty;",
+                  "        pm.expect(item.status).to.be.oneOf(['pending', 'completed', 'cancelled', 'rescheduled']);",
+                  "        pm.expect(item.countryISO).to.be.oneOf(['PE', 'CL']);",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Appointment History",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentToken}}",
+                "description": "Agent token can view any appointment's history. Use insuredToken only if sub matches the insuredId on the appointment's events."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/appointments/{{peAppointmentUuid}}/history",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "appointments",
+                "{{peAppointmentUuid}}",
+                "history"
+              ]
+            },
+            "description": "Returns the full ordered event log for the PE appointment created above (APPOINTMENT_CREATED so far). Read-only — safe to run regardless of what Cancel/Reschedule do later."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response is an array of events, oldest first', function () {",
+                  "    const events = pm.response.json();",
+                  "    pm.expect(events).to.be.an('array');",
+                  "    events.forEach(function (e) {",
+                  "        pm.expect(e.eventId).to.be.a('string').and.not.empty;",
+                  "        pm.expect(e.appointmentUuid).to.eql(pm.collectionVariables.get('peAppointmentUuid'));",
+                  "        pm.expect(e.eventType).to.be.oneOf([",
+                  "            'APPOINTMENT_CREATED', 'APPOINTMENT_COMPLETED', 'APPOINTMENT_CANCELLED', 'APPOINTMENT_RESCHEDULED'",
+                  "        ]);",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel Appointment",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentToken}}",
+                "description": "Agent token can cancel any appointment. Use insuredToken only if sub matches the appointment's insuredId."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/appointments/{{peAppointmentUuid}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "appointments",
+                "{{peAppointmentUuid}}"
+              ]
+            },
+            "description": "Cancels the PE appointment created above. Only a pending appointment can be cancelled - run this before Reschedule Appointment (which acts on the separate CL appointment, so the two don't conflict)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response confirms cancellation', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.message).to.eql('Appointment cancelled');",
+                  "    pm.expect(json.appointmentUuid).to.eql(pm.collectionVariables.get('peAppointmentUuid'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reschedule Appointment",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentToken}}",
+                "description": "Agent token can reschedule any appointment. Use insuredToken only if sub matches the appointment's insuredId."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"newScheduleId\": 99\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/appointments/{{clAppointmentUuid}}/reschedule",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "appointments",
+                "{{clAppointmentUuid}}",
+                "reschedule"
+              ]
+            },
+            "description": "Reschedules the CL appointment created above: marks it rescheduled and creates a new pending appointment for newScheduleId. Uses the separate CL appointment so this never conflicts with Cancel Appointment (which acts on PE)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 202 Accepted', function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});",
+                  "",
+                  "pm.test('Response contains the new appointment reference', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.message).to.eql('Appointment rescheduled');",
+                  "    pm.expect(json.newAppointmentUuid).to.be.a('string').and.not.empty;",
+                  "    pm.expect(json.newScheduleId).to.eql(99);",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set('lastRescheduledAppointmentUuid', pm.response.json().newAppointmentUuid);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Appointment - Missing Fields (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"insuredId\": \"\",\n  \"scheduleId\": null,\n  \"countryISO\": \"XX\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/appointments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "appointments"
+              ]
+            },
+            "description": "Negative test: missing insuredId and null scheduleId should return 400 with a message field."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400 Bad Request', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Response contains a message field', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.message).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Appointment - Invalid countryISO (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"insuredId\": \"12345\",\n  \"scheduleId\": 10,\n  \"countryISO\": \"XX\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/appointments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "appointments"
+              ]
+            },
+            "description": "Negative test: countryISO must be PE or CL."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400 Bad Request', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Error message mentions countryISO', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.message).to.include('countryISO');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Authorization",
+      "description": "Tests for the Lambda Authorizer (JWT validation, RBAC). These verify the authorizer rejects invalid or unauthorized requests before they reach the handler.",
+      "item": [
+        {
+          "name": "Create Appointment - No Token (401)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"insuredId\": \"12345\",\n  \"scheduleId\": 10,\n  \"countryISO\": \"PE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/appointments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "appointments"
+              ]
+            },
+            "description": "Negative test: omitting the Authorization header should cause the Lambda Authorizer to return 401 Unauthorized."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 401 Unauthorized', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Appointment - Insured Creating for Another Insured (403)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{insuredToken}}",
+                "description": "insuredToken has sub=12345 and role=insured. Trying to create for insuredId 99999 (different from sub) must return 403."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"insuredId\": \"99999\",\n  \"scheduleId\": 10,\n  \"countryISO\": \"PE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/appointments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "appointments"
+              ]
+            },
+            "description": "Negative test: an insured-role token with sub=12345 cannot create appointments for insuredId 99999. Expects 403 Forbidden."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 403 Forbidden', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "",
+      "type": "string",
+      "description": "Base URL — set via an active environment (local or dev)."
+    },
+    {
+      "key": "agentToken",
+      "value": "",
+      "type": "string",
+      "description": "HS256 JWT with role=agent. Generate with signJwt('agent-001', 'agent', secret) from src/infra/jwt.ts."
+    },
+    {
+      "key": "insuredToken",
+      "value": "",
+      "type": "string",
+      "description": "HS256 JWT with role=insured and sub=12345. Generate with signJwt('12345', 'insured', secret) from src/infra/jwt.ts."
+    },
+    {
+      "key": "lastInsuredId",
+      "value": "",
+      "type": "string",
+      "description": "Set automatically by the Create Appointment - PE test."
+    },
+    {
+      "key": "lastAppointmentUuid",
+      "value": "",
+      "type": "string",
+      "description": "Set automatically by the Create Appointment - PE test."
+    },
+    {
+      "key": "peAppointmentUuid",
+      "value": "",
+      "type": "string",
+      "description": "Set automatically by 'Create Appointment - PE'. Used by Cancel Appointment and Get Appointment History."
+    },
+    {
+      "key": "clAppointmentUuid",
+      "value": "",
+      "type": "string",
+      "description": "Set automatically by 'Create Appointment - CL'. Used by Reschedule Appointment (kept separate from peAppointmentUuid so cancel and reschedule don't fight over the same appointment's PENDING state)."
+    },
+    {
+      "key": "lastRescheduledAppointmentUuid",
+      "value": "",
+      "type": "string",
+      "description": "Set automatically by Reschedule Appointment — the NEW appointment created by the reschedule."
+    }
+  ]
+}

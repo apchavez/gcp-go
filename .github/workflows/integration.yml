@@ -1,0 +1,75 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Cloud Run service base URL, for example https://xxxxx-uc.a.run.app"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  postman:
+    name: Run Postman collection
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Install Newman
+        run: npm install --global newman
+
+      - name: Generate test JWT
+        id: jwt
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          TOKEN=$(node -e '
+            const crypto = require("crypto");
+            const b64url = (buf) => buf.toString("base64url");
+            const header = b64url(Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })));
+            const payload = b64url(Buffer.from(JSON.stringify({
+              sub: "integration-tests",
+              role: "agent",
+              iat: Math.floor(Date.now() / 1000),
+              exp: Math.floor(Date.now() / 1000) + 3600,
+            })));
+            const sig = crypto.createHmac("sha256", process.env.JWT_SECRET)
+              .update(`${header}.${payload}`)
+              .digest("base64url");
+            console.log(`${header}.${payload}.${sig}`);
+          ')
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Run collection
+        run: >
+          newman run postman/gcp-go.postman_collection.json
+          --env-var baseUrl="${{ inputs.base_url }}"
+          --env-var token="${{ steps.jwt.outputs.token }}"
+          --reporters cli,junit
+          --reporter-junit-export newman-results.xml
+
+      - name: Run k6 load tests
+        uses: grafana/k6-action@v0.3.1
+        with:
+          filename: tests/load/appointments.js
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-test-results
+          path: newman-results.xml
+          if-no-files-found: warn

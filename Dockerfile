@@ -2,7 +2,7 @@
 # Build target selects which binary (api or worker) to package - both live in this one repo.
 ARG BINARY=api
 
-FROM golang:1.25-bookworm AS build
+FROM golang:1.26-bookworm AS build
 ARG BINARY
 WORKDIR /src
 COPY go.mod go.sum ./

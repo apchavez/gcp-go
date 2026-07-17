@@ -1,0 +1,126 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: dev
+        type: choice
+        options: [dev, test, prod]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Deploy to GCP
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker gcr.io --quiet
+
+      - name: Build and push API image
+        run: |
+          docker build --build-arg BINARY=api -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/clinic-scheduling-api:${{ github.sha }} .
+          docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/clinic-scheduling-api:${{ github.sha }}
+
+      - name: Build and push worker image
+        run: |
+          docker build --build-arg BINARY=worker -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/clinic-scheduling-worker:${{ github.sha }} .
+          docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/clinic-scheduling-worker:${{ github.sha }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform apply
+        working-directory: terraform
+        run: |
+          terraform init
+
+          # The Firestore "(default)" database cannot actually be deleted via the API
+          # (Google only supports disabling/downgrading it), so a prior `terraform destroy`
+          # dropped it from state without removing the real resource. Reconcile by importing
+          # it back into state before apply - idempotent: harmless no-op once it's tracked.
+          # Needs the same -var flags as apply, or terraform prompts interactively (hangs in
+          # CI) and -input=false makes that a hard failure instead of a silent no-op via `|| true`.
+          terraform import -input=false \
+            -var="gcp_project_id=${{ secrets.GCP_PROJECT_ID }}" \
+            -var="environment=${{ inputs.environment }}" \
+            -var="jwt_secret=${{ secrets.JWT_SECRET }}" \
+            -var="sendgrid_api_key=${{ secrets.SENDGRID_API_KEY }}" \
+            -var="cloudsql_password=${{ secrets.CLOUDSQL_PASSWORD }}" \
+            -var="image_tag=${{ github.sha }}" \
+            google_firestore_database.default \
+            "projects/${{ secrets.GCP_PROJECT_ID }}/databases/(default)" || true
+
+          terraform apply -auto-approve -input=false \
+            -var="gcp_project_id=${{ secrets.GCP_PROJECT_ID }}" \
+            -var="environment=${{ inputs.environment }}" \
+            -var="jwt_secret=${{ secrets.JWT_SECRET }}" \
+            -var="sendgrid_api_key=${{ secrets.SENDGRID_API_KEY }}" \
+            -var="cloudsql_password=${{ secrets.CLOUDSQL_PASSWORD }}" \
+            -var="image_tag=${{ github.sha }}"
+
+      - name: Smoke test
+        working-directory: terraform
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          API_URL=$(terraform output -raw api_url)
+          echo "API URL: $API_URL"
+
+          STATUS="000"
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /tmp/health.json -w "%{http_code}" "$API_URL/health" || echo "000")
+            if [ "$STATUS" = "200" ]; then break; fi
+            echo "Waiting for service to become ready (status=$STATUS)..."
+            sleep 10
+          done
+          echo "Health check status: $STATUS"
+          cat /tmp/health.json || true
+          if [ "$STATUS" != "200" ]; then
+            echo "Smoke test failed: /health did not return 200"
+            exit 1
+          fi
+
+          b64url() { base64 | tr -d '=\n' | tr '/+' '_-'; }
+          NOW=$(date +%s)
+          EXP=$((NOW + 300))
+          HEADER=$(printf '{"alg":"HS256","typ":"JWT"}' | b64url)
+          PAYLOAD=$(printf '{"sub":"00000","role":"agent","iat":%s,"exp":%s}' "$NOW" "$EXP" | b64url)
+          SIGNATURE=$(printf '%s' "${HEADER}.${PAYLOAD}" | openssl dgst -sha256 -hmac "$JWT_SECRET" -binary | b64url)
+          TOKEN="${HEADER}.${PAYLOAD}.${SIGNATURE}"
+
+          LIST_STATUS=$(curl -s -o /tmp/list.json -w "%{http_code}" -H "Authorization: Bearer $TOKEN" "$API_URL/appointments/00000")
+          echo "List-by-insured status: $LIST_STATUS"
+          cat /tmp/list.json || true
+          if [ "$LIST_STATUS" != "200" ]; then
+            echo "Smoke test failed: authenticated /appointments/{insuredId} did not return 200"
+            exit 1
+          fi
+
+          echo "Smoke test passed: service is live and functional."
+

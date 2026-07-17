@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build, test and validate API
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+
+      - name: Run tests
+        run: go test ./... -race
+
+      - name: Compute coverage report (packages with tests only)
+        run: |
+          pkgs=$(go list ./... | grep -v '/cmd/' | grep -v '/internal/api$' | grep -v '/internal/infrastructure/messaging$' | grep -v '/internal/infrastructure/repos$' | grep -v '/internal/infrastructure/notifications$' | grep -v '/internal/shared$' | paste -sd,)
+          go test $(echo $pkgs | tr ',' ' ') -coverprofile=coverage.out -covermode=atomic
+
+      - name: Enforce 80% coverage gate on domain + application layers
+        run: |
+          go test ./internal/domain/... ./internal/application/... -coverprofile=core-coverage.out
+          go tool cover -func=core-coverage.out | tail -1 | awk '{ if ($3+0 < 80.0) { print "coverage " $3 " is below the 80% gate"; exit 1 } else { print "coverage " $3 " meets the 80% gate" } }'
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform fmt & validate
+        working-directory: terraform
+        run: |
+          terraform fmt -check -diff
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate OpenAPI contract
+        run: npx --yes @redocly/cli lint api/openapi.yaml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: coverage.out
+          if-no-files-found: warn
+
+      - name: SonarCloud analysis
+        if: vars.SONAR_ORGANIZATION != '' && (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]')
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

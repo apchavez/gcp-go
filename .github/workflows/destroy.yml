@@ -1,0 +1,116 @@
+name: Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment to tear down
+        required: true
+        default: dev
+        type: choice
+        options: [dev, test, prod]
+      confirm:
+        description: Type DELETE to confirm
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  destroy:
+    name: Destroy GCP infrastructure
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Verify confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "DELETE" ]; then
+            echo "Confirmation input must be exactly 'DELETE' - aborting."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform destroy
+        working-directory: terraform
+        run: |
+          terraform init
+          terraform destroy -auto-approve \
+            -var="gcp_project_id=${{ secrets.GCP_PROJECT_ID }}" \
+            -var="environment=${{ inputs.environment }}" \
+            -var="jwt_secret=${{ secrets.JWT_SECRET }}" \
+            -var="sendgrid_api_key=${{ secrets.SENDGRID_API_KEY }}" \
+            -var="cloudsql_password=${{ secrets.CLOUDSQL_PASSWORD }}"
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Delete orphaned container images
+        run: |
+          # docker-publish pushes these to gcr.io out of band from Terraform,
+          # so a terraform destroy alone leaves billable image storage behind.
+          # Requires the deployer SA to hold artifactregistry.repositories.deleteArtifacts
+          # on the gcr.io Artifact Registry repo (gcr.io is AR-backed) - if that role isn't
+          # granted, this step logs a 403 and continues rather than failing the whole run;
+          # see README's "Known limitation" note for the exact role to grant.
+          for repo in clinic-scheduling-api clinic-scheduling-worker; do
+            IMAGE="gcr.io/${{ secrets.GCP_PROJECT_ID }}/$repo"
+            for digest in $(gcloud container images list-tags "$IMAGE" --format="get(digest)" 2>/dev/null); do
+              gcloud container images delete "$IMAGE@$digest" --force-delete-tags --quiet || echo "WARNING: could not delete $IMAGE@$digest (likely missing artifactregistry.repositories.deleteArtifacts on the deployer SA)"
+            done
+          done
+
+      - name: Verify zero cost at rest
+        run: |
+          PROJECT="${{ secrets.GCP_PROJECT_ID }}"
+          echo "== Cloud Run services =="
+          gcloud run services list --project "$PROJECT" --format="table(name,region)"
+          echo "== Cloud SQL instances =="
+          gcloud sql instances list --project "$PROJECT" --format="table(name,state)"
+          echo "== Pub/Sub topics =="
+          gcloud pubsub topics list --project "$PROJECT" --format="table(name)"
+          echo "== Secret Manager secrets =="
+          gcloud secrets list --project "$PROJECT" --format="table(name)"
+          echo "== gcr.io image tags remaining (api) =="
+          gcloud container images list-tags "gcr.io/$PROJECT/clinic-scheduling-api" --format="table(digest,tags)" 2>&1 || echo "(none / repo empty)"
+          echo "== gcr.io image tags remaining (worker) =="
+          gcloud container images list-tags "gcr.io/$PROJECT/clinic-scheduling-worker" --format="table(digest,tags)" 2>&1 || echo "(none / repo empty)"
+
+          FAIL=0
+          if [ -n "$(gcloud run services list --project "$PROJECT" --format='value(name)')" ]; then
+            echo "LEFTOVER: Cloud Run services still exist"; FAIL=1
+          fi
+          if [ -n "$(gcloud sql instances list --project "$PROJECT" --format='value(name)')" ]; then
+            echo "LEFTOVER: Cloud SQL instances still exist"; FAIL=1
+          fi
+          if [ -n "$(gcloud pubsub topics list --project "$PROJECT" --format='value(name)')" ]; then
+            echo "LEFTOVER: Pub/Sub topics still exist"; FAIL=1
+          fi
+          if [ -n "$(gcloud secrets list --project "$PROJECT" --format='value(name)')" ]; then
+            echo "LEFTOVER: Secret Manager secrets still exist"; FAIL=1
+          fi
+          for repo in clinic-scheduling-api clinic-scheduling-worker; do
+            TAGS=$(gcloud container images list-tags "gcr.io/$PROJECT/$repo" --format='value(digest)' 2>/dev/null || true)
+            if [ -n "$TAGS" ]; then
+              echo "LEFTOVER: gcr.io/$PROJECT/$repo still has images"; FAIL=1
+            fi
+          done
+          if [ "$FAIL" != "0" ]; then
+            echo "Teardown verification FAILED: billable resources remain."
+            exit 1
+          fi
+          echo "Teardown verification passed: zero billable resources remain (Firestore default DB and the GCS Terraform state bucket are expected to remain, no fixed cost)."
+

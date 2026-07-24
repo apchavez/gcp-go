@@ -77,6 +77,6 @@ jobs:
 
       - name: SonarCloud analysis
         if: vars.SONAR_ORGANIZATION != '' && (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]')
-        uses: SonarSource/sonarqube-scan-action@v6
+        uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

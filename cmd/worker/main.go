@@ -1,7 +1,7 @@
 // The worker binary is a separate Cloud Run service receiving Pub/Sub push-subscription
-// HTTP callbacks for the PE/CL country subscriptions (each filtered by the "country"
-// message attribute at the subscription level - see terraform/pubsub.tf). It calls
-// AppointmentService.Complete, which is idempotent against at-least-once redelivery.
+// HTTP callbacks from the single shared "appointment-worker" subscription (see
+// terraform/pubsub.tf). It calls AppointmentService.Complete, which is idempotent against
+// at-least-once redelivery.
 package main
 
 import (
@@ -46,8 +46,8 @@ func main() {
 
 	notifier := newNotifier()
 
-	// The publisher port is only exercised by CreateAppointment/Reschedule, which the
-	// worker binary never calls (it only handles Complete) - a no-op is correct here.
+	// The publisher port is only exercised by CreateAppointment, which the worker binary
+	// never calls (it only handles Complete) - a no-op is correct here.
 	svc := application.NewAppointmentService(stateRepo, noopPublisher{}, eventStore, notifier)
 
 	mux := http.NewServeMux()

@@ -204,7 +204,7 @@
 									"    items.forEach(function (item) {",
 									"        pm.expect(item.appointmentUuid).to.be.a('string').and.not.empty;",
 									"        pm.expect(item.insuredId).to.be.a('string').and.not.empty;",
-									"        pm.expect(item.status).to.be.oneOf(['pending', 'completed', 'cancelled', 'rescheduled']);",
+									"        pm.expect(item.status).to.be.oneOf(['pending', 'completed']);",
 									"        pm.expect(item.countryISO).to.be.oneOf(['PE', 'CL']);",
 									"    });",
 									"});"
@@ -235,7 +235,7 @@
 								"history"
 							]
 						},
-						"description": "Returns the full ordered event log for the PE appointment created above (APPOINTMENT_CREATED so far). Read-only — safe to run regardless of what Cancel/Reschedule do later."
+						"description": "Returns the full ordered event log for the PE appointment created above (APPOINTMENT_CREATED so far)."
 					},
 					"event": [
 						{
@@ -254,113 +254,10 @@
 									"        pm.expect(e.eventId).to.be.a('string').and.not.empty;",
 									"        pm.expect(e.appointmentUuid).to.eql(pm.collectionVariables.get('peAppointmentUuid'));",
 									"        pm.expect(e.eventType).to.be.oneOf([",
-									"            'APPOINTMENT_CREATED', 'APPOINTMENT_COMPLETED', 'APPOINTMENT_CANCELLED', 'APPOINTMENT_RESCHEDULED'",
+									"            'APPOINTMENT_CREATED', 'APPOINTMENT_COMPLETED'",
 									"        ]);",
 									"    });",
 									"});"
-								]
-							}
-						}
-					]
-				},
-				{
-					"name": "Cancel Appointment",
-					"request": {
-						"method": "DELETE",
-						"header": [
-							{
-								"key": "Authorization",
-								"value": "Bearer {{agentToken}}",
-								"description": "Agent token can cancel any appointment. Use insuredToken only if sub matches the appointment's insuredId."
-							}
-						],
-						"url": {
-							"raw": "{{baseUrl}}/appointments/{{peAppointmentUuid}}",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"appointments",
-								"{{peAppointmentUuid}}"
-							]
-						},
-						"description": "Cancels the PE appointment created above. Only a pending appointment can be cancelled - run this before Reschedule Appointment (which acts on the separate CL appointment, so the two don't conflict)."
-					},
-					"event": [
-						{
-							"listen": "test",
-							"script": {
-								"type": "text/javascript",
-								"exec": [
-									"pm.test('Status is 200 OK', function () {",
-									"    pm.response.to.have.status(200);",
-									"});",
-									"",
-									"pm.test('Response confirms cancellation', function () {",
-									"    const json = pm.response.json();",
-									"    pm.expect(json.message).to.eql('Appointment cancelled');",
-									"    pm.expect(json.appointmentUuid).to.eql(pm.collectionVariables.get('peAppointmentUuid'));",
-									"});"
-								]
-							}
-						}
-					]
-				},
-				{
-					"name": "Reschedule Appointment",
-					"request": {
-						"method": "PATCH",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							},
-							{
-								"key": "Authorization",
-								"value": "Bearer {{agentToken}}",
-								"description": "Agent token can reschedule any appointment. Use insuredToken only if sub matches the appointment's insuredId."
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"newScheduleId\": 99\n}",
-							"options": {
-								"raw": {
-									"language": "json"
-								}
-							}
-						},
-						"url": {
-							"raw": "{{baseUrl}}/appointments/{{clAppointmentUuid}}/reschedule",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"appointments",
-								"{{clAppointmentUuid}}",
-								"reschedule"
-							]
-						},
-						"description": "Reschedules the CL appointment created above: marks it rescheduled and creates a new pending appointment for newScheduleId. Uses the separate CL appointment so this never conflicts with Cancel Appointment (which acts on PE)."
-					},
-					"event": [
-						{
-							"listen": "test",
-							"script": {
-								"type": "text/javascript",
-								"exec": [
-									"pm.test('Status is 202 Accepted', function () {",
-									"    pm.response.to.have.status(202);",
-									"});",
-									"",
-									"pm.test('Response contains the new appointment reference', function () {",
-									"    const json = pm.response.json();",
-									"    pm.expect(json.message).to.eql('Appointment rescheduled');",
-									"    pm.expect(json.newAppointmentUuid).to.be.a('string').and.not.empty;",
-									"    pm.expect(json.newScheduleId).to.eql(99);",
-									"});",
-									"",
-									"pm.collectionVariables.set('lastRescheduledAppointmentUuid', pm.response.json().newAppointmentUuid);"
 								]
 							}
 						}
@@ -645,19 +542,13 @@
 			"key": "peAppointmentUuid",
 			"value": "",
 			"type": "string",
-			"description": "Set automatically by 'Create Appointment - PE'. Used by Cancel Appointment and Get Appointment History."
+			"description": "Set automatically by 'Create Appointment - PE'. Used by Get Appointment History."
 		},
 		{
 			"key": "clAppointmentUuid",
 			"value": "",
 			"type": "string",
-			"description": "Set automatically by 'Create Appointment - CL'. Used by Reschedule Appointment (kept separate from peAppointmentUuid so cancel and reschedule don't fight over the same appointment's PENDING state)."
-		},
-		{
-			"key": "lastRescheduledAppointmentUuid",
-			"value": "",
-			"type": "string",
-			"description": "Set automatically by Reschedule Appointment — the NEW appointment created by the reschedule."
+			"description": "Set automatically by 'Create Appointment - CL'."
 		}
 	]
 }

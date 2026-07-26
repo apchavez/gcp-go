@@ -70,14 +70,6 @@ func (r *FirestoreStateRepo) MarkCompleted(ctx context.Context, appointmentUUID 
 	return r.updateStatus(ctx, appointmentUUID, domain.StatusCompleted)
 }
 
-func (r *FirestoreStateRepo) MarkCancelled(ctx context.Context, appointmentUUID string) error {
-	return r.updateStatus(ctx, appointmentUUID, domain.StatusCancelled)
-}
-
-func (r *FirestoreStateRepo) MarkRescheduled(ctx context.Context, appointmentUUID string) error {
-	return r.updateStatus(ctx, appointmentUUID, domain.StatusRescheduled)
-}
-
 // cursor is an opaque base64url-encoded JSON blob wrapping the last document's Firestore
 // document ID, mirroring the AWS sibling's DynamoDB LastEvaluatedKey-based cursor pattern.
 type cursorPayload struct {

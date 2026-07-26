@@ -61,8 +61,6 @@ func main() {
 	r := chi.NewRouter()
 	r.Post("/appointments", handlers.CreateAppointment)
 	r.Get("/appointments/{insuredId}", handlers.ListByInsured)
-	r.Delete("/appointments/{appointmentUuid}", handlers.CancelAppointment)
-	r.Patch("/appointments/{appointmentUuid}/reschedule", handlers.RescheduleAppointment)
 	r.Get("/appointments/{appointmentUuid}/history", handlers.GetAppointmentHistory)
 	r.Get("/health", handlers.Health(func(req *http.Request) shared.HealthStatus {
 		checks := map[string]string{"firestore": shared.HealthUp}

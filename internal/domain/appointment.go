@@ -3,10 +3,8 @@ package domain
 // Status values mirror the AWS TypeScript sibling's lowercase string literals exactly,
 // since the JSON wire format is meant to be interoperable across all clinic-scheduling siblings.
 const (
-	StatusPending     = "pending"
-	StatusCompleted   = "completed"
-	StatusCancelled   = "cancelled"
-	StatusRescheduled = "rescheduled"
+	StatusPending   = "pending"
+	StatusCompleted = "completed"
 )
 
 const (

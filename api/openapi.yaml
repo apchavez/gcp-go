@@ -3,12 +3,11 @@ info:
   title: Clinic Scheduling Platform — GCP
   version: 1.0.0
   description: >
-    API for creating, listing, cancelling, rescheduling, and viewing the history of appointments.
+    API for creating, listing, and viewing the history of appointments.
     Confirmation is performed asynchronously (Pub/Sub push subscription → Cloud Run worker →
-    Cloud SQL) and updates the status in Firestore to "completed." Cancel/reschedule enforce the
-    same insured-owns-their-data rule as create/list, and every state transition is recorded in an
-    event log readable via the history endpoint. Same domain and Clean Architecture as the AWS
-    TypeScript and Azure Python siblings - only the cloud/language changes.
+    Cloud SQL) and updates the status in Firestore to "completed." Every state transition is
+    recorded in an event log readable via the history endpoint. Same domain and Clean
+    Architecture as the AWS TypeScript and Azure Python siblings - only the cloud/language changes.
   contact:
     name: Alexander Prieto Chavez
     email: alexander.prieto.chavez@gmail.com
@@ -198,118 +197,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-    delete:
-      tags: [Appointments]
-      operationId: cancelAppointment
-      summary: Cancel a pending appointment
-      description: >
-        Cancels a `pending` appointment. The `insured` role can only cancel their own appointments
-        (checked via a lookup before the state change); `agent` can cancel any appointment.
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        "200":
-          description: Appointment cancelled
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message: { type: string, example: "Appointment cancelled" }
-                  appointmentUuid: { type: string, format: uuid }
-        "400":
-          description: Missing appointmentUuid
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "403":
-          description: Missing/invalid Bearer token, or `insured` attempted to cancel another insured's appointment
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "404":
-          description: Appointment not found
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "409":
-          description: Appointment is not `pending`
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "500":
-          description: Internal error
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
-  /appointments/{id}/reschedule:
-    patch:
-      tags: [Appointments]
-      operationId: rescheduleAppointment
-      summary: Reschedule a pending appointment
-      description: >
-        Marks the existing `pending` appointment as `rescheduled` and creates a new `pending`
-        appointment for the new schedule slot, which flows through the same SNS → SQS →
-        country-worker → EventBridge pipeline as a fresh creation. Same ownership rule as cancel.
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [newScheduleId]
-              properties:
-                newScheduleId: { type: integer, minimum: 1, example: 42 }
-      responses:
-        "202":
-          description: Appointment rescheduled
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message: { type: string, example: "Appointment rescheduled" }
-                  newAppointmentUuid: { type: string, format: uuid }
-                  newScheduleId: { type: integer }
-        "400":
-          description: Missing appointmentUuid, missing body, or invalid newScheduleId
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "403":
-          description: Missing/invalid Bearer token, or `insured` attempted to reschedule another insured's appointment
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "404":
-          description: Appointment not found
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "409":
-          description: Appointment is not `pending`
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "500":
-          description: Internal error
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
   /appointments/{id}/history:
     get:
       tags: [Appointments]
@@ -389,8 +276,8 @@ components:
           type: string
           format: email
           description: >
-            Optional. When present, carried through to cancel/reschedule/complete for best-effort
-            SES email notifications (only sent if SES_SENDER_ADDRESS is configured server-side).
+            Optional. When present, carried through to the completion step for best-effort
+            SendGrid email notifications (only sent if SENDGRID_API_KEY is configured server-side).
           example: "insured@example.com"
 
     Appointment:
@@ -427,7 +314,7 @@ components:
         status:
           type: string
           description: Appointment status
-          enum: [pending, completed, cancelled, rescheduled]
+          enum: [pending, completed]
           example: pending
         createdAt:
           type: string
@@ -478,7 +365,7 @@ components:
           format: uuid
         eventType:
           type: string
-          enum: [APPOINTMENT_CREATED, APPOINTMENT_COMPLETED, APPOINTMENT_CANCELLED, APPOINTMENT_RESCHEDULED]
+          enum: [APPOINTMENT_CREATED, APPOINTMENT_COMPLETED]
         insuredId:
           type: string
           pattern: '^\d{5}$'
@@ -489,7 +376,7 @@ components:
           enum: [PE, CL]
         status:
           type: string
-          enum: [pending, completed, cancelled, rescheduled]
+          enum: [pending, completed]
         occurredAt:
           type: string
           format: date-time

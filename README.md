@@ -14,7 +14,7 @@ Este es el **tercer hermano** del mismo dominio de agendamiento de citas, junto 
 | [azure-python](https://github.com/apchavez/azure-python) | Azure Functions / Python |
 | **gcp-go** (este repo) | GCP Cloud Run / Go |
 
-Mismo dominio de negocio, mismos 5 endpoints, mismas reglas de autorización por titularidad del asegurado, y los mismos números de JWT hecho a mano (HS256) y resiliencia retry/circuit-breaker que sus dos hermanos — solo cambian el cloud y el lenguaje, a propósito, para demostrar que las mismas capacidades de ingeniería son portables entre ecosistemas.
+Mismo dominio de negocio, mismos 3 endpoints, mismas reglas de autorización por titularidad del asegurado, y los mismos números de JWT hecho a mano (HS256) y resiliencia retry/circuit-breaker que sus dos hermanos — solo cambian el cloud y el lenguaje, a propósito, para demostrar que las mismas capacidades de ingeniería son portables entre ecosistemas.
 
 Fue desplegado en vivo a un proyecto real de GCP (Cloud Run + Firestore + Pub/Sub + Cloud SQL) y probado de punta a punta — crear, obtener historial, y listado paginado fueron verificados contra la API desplegada — y luego destruido vía `destroy.yml` para evitar costo ocioso. `deploy.yml` vuelve a desplegar el mismo stack bajo demanda con una corrida manual.
 
@@ -31,7 +31,7 @@ Fue desplegado en vivo a un proyecto real de GCP (Cloud Run + Firestore + Pub/Su
 | Router de API | `net/http` + `chi` |
 | Almacén de estado | Firestore (modo Native) — colecciones `appointments` + `appointment-events` |
 | Almacén relacional | Cloud SQL para PostgreSQL (solo citas finales/completadas) |
-| Mensajería | Pub/Sub (tópicos `appointment-created`/`completed`/`cancelled`, una suscripción push para ambos países) |
+| Mensajería | Pub/Sub (tópico único `appointment-created`, una suscripción push compartida) |
 | Notificaciones | SendGrid (best-effort; no-op si no está configurado) |
 | Auth | JWT HS256 hecho a mano, autorización por titularidad del asegurado |
 | Resiliencia | Retry + circuit breaker hecho a mano (3 intentos, backoff 100/200/400ms, ventana de 10 llamadas, umbral 50%, 30s abierto, 3 sondas half-open) |
@@ -45,9 +45,9 @@ Fue desplegado en vivo a un proyecto real de GCP (Cloud Run + Firestore + Pub/Su
 flowchart TD
     Client([Cliente]) -->|POST /appointments| API[Cloud Run: api]
     API -->|guarda PENDING| FS[(Firestore: appointments)]
-    API -->|publica, atributo country| PS[Pub/Sub: appointment-created]
+    API -->|publica| PS[Pub/Sub: appointment-created]
     API -->|agrega evento| FSE[(Firestore: appointment-events)]
-    PS -->|push, ambos países| WPE[Cloud Run: worker]
+    PS -->|push| WPE[Cloud Run: worker]
     WPE -->|marca COMPLETED| FS
     WPE -->|persiste| SQL[(Cloud SQL: appointments)]
     WPE -->|notifica| SG[SendGrid]
@@ -62,7 +62,7 @@ gcp-go/
 │   └── worker/         Worker de suscripción push de Pub/Sub (servicio Cloud Run separado)
 ├── internal/
 │   ├── domain/          Appointment, AppointmentEvent, ports (interfaces), errores de dominio
-│   ├── application/     AppointmentService — los 6 casos de uso
+│   ├── application/     AppointmentService — los 4 casos de uso
 │   ├── infrastructure/
 │   │   ├── auth/         verificación/firma de JWT hecha a mano + guard de auth
 │   │   ├── resilience/   retry + circuit breaker hecho a mano
@@ -83,8 +83,6 @@ gcp-go/
 |---|---|---|
 | POST | `/appointments` | Crea una nueva cita (estado `pending`) |
 | GET | `/appointments/{insuredId}` | Lista citas por asegurado, paginado (`pageSize`, `cursor`) |
-| DELETE | `/appointments/{appointmentUuid}` | Cancela una cita pendiente |
-| PATCH | `/appointments/{appointmentUuid}/reschedule` | Reagenda una cita pendiente |
 | GET | `/appointments/{appointmentUuid}/history` | Historial completo de eventos de una cita |
 | GET | `/health` | Health check (anónimo) |
 
@@ -92,7 +90,7 @@ Especificación completa: [`api/openapi.yaml`](api/openapi.yaml).
 
 ### Autorización
 
-Token Bearer JWT, `HS256`, claims `{sub, role, iat, exp}`. El rol `insured` solo puede actuar sobre su propio `insuredId` (comparado contra `sub`); el rol `agent` no tiene restricción. Esto se aplica de forma idéntica en los 4 endpoints que reciben un identificador de cita/asegurado, incluyendo `GET .../history` — que primero busca la cita para verificar titularidad, en vez de derivar el dueño a partir del primer evento (un detalle sutil que de hecho fue un bug real en los handlers de historial de Java/Python de este dominio, corregido en esta sesión).
+Token Bearer JWT, `HS256`, claims `{sub, role, iat, exp}`. El rol `insured` solo puede actuar sobre su propio `insuredId` (comparado contra `sub`); el rol `agent` no tiene restricción. Esto se aplica de forma idéntica en los endpoints que reciben un identificador de cita/asegurado, incluyendo `GET .../history` — que primero busca la cita para verificar titularidad, en vez de derivar el dueño a partir del primer evento (un detalle sutil que de hecho fue un bug real en los handlers de historial de Java/Python de este dominio, corregido en esta sesión).
 
 ## Desarrollo local
 
@@ -112,11 +110,11 @@ go vet ./...
 golangci-lint run ./...
 ```
 
-**31 tests en 4 archivos de test.** Las capas de dominio + aplicación tienen un gate de cobertura del 80% (refleja los gates de JaCoCo/pytest-cov de los hermanos AWS/Azure); los adaptadores de infraestructura están testeados pero no tienen gate, ya que envuelven clientes reales del SDK de GCP.
+**25 tests en 4 archivos de test.** Las capas de dominio + aplicación tienen un gate de cobertura del 80% (refleja los gates de JaCoCo/pytest-cov de los hermanos AWS/Azure); los adaptadores de infraestructura están testeados pero no tienen gate, ya que envuelven clientes reales del SDK de GCP.
 
 ## Infraestructura
 
-`terraform/` provisiona: 2 servicios Cloud Run (api, worker), Firestore (modo Native) con índices compuestos, 3 tópicos Pub/Sub + 1 suscripción push (ambos países, sin filtro — ni el hander ni Cloud SQL diferencian por país) + un tópico dead-letter, Cloud SQL para PostgreSQL, Secret Manager (secreto JWT, key de SendGrid, password de Cloud SQL), y una service account dedicada con bindings IAM de mínimo privilegio.
+`terraform/` provisiona: 2 servicios Cloud Run (api, worker), Firestore (modo Native) con índices compuestos, 1 tópico Pub/Sub + 1 suscripción push compartida + un tópico dead-letter, Cloud SQL para PostgreSQL, Secret Manager (secreto JWT, key de SendGrid, password de Cloud SQL), y una service account dedicada con bindings IAM de mínimo privilegio.
 
 El CI de este repo no provisiona ningún proyecto GCP en vivo — `deploy.yml`/`destroy.yml` son solo `workflow_dispatch` y requieren credenciales de GCP configuradas como secretos del repositorio.
 

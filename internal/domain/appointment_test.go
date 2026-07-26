@@ -46,7 +46,4 @@ func TestNewAppointmentEvent(t *testing.T) {
 func TestErrors(t *testing.T) {
 	nf := &domain.NotFoundError{Message: "not found"}
 	assert.Equal(t, "not found", nf.Error())
-
-	c := &domain.ConflictError{Message: "conflict"}
-	assert.Equal(t, "conflict", c.Error())
 }

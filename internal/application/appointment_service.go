@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -71,7 +70,7 @@ func (s *AppointmentService) GetHistory(ctx context.Context, appointmentUUID str
 	return s.eventStore.FindByAppointmentID(ctx, appointmentUUID)
 }
 
-// Complete is invoked by the Pub/Sub-triggered country worker. It is idempotent: if the
+// Complete is invoked by the Pub/Sub-triggered worker. It is idempotent: if the
 // appointment is already COMPLETED (at-least-once redelivery), it silently no-ops.
 func (s *AppointmentService) Complete(ctx context.Context, appointmentUUID string) error {
 	appointment, err := s.stateRepo.FindByID(ctx, appointmentUUID)
@@ -95,74 +94,3 @@ func (s *AppointmentService) Complete(ctx context.Context, appointmentUUID strin
 	return s.notifier.NotifyCompleted(ctx, *appointment)
 }
 
-func (s *AppointmentService) Cancel(ctx context.Context, appointmentUUID string) error {
-	appointment, err := s.requirePending(ctx, appointmentUUID, "cancelled")
-	if err != nil {
-		return err
-	}
-	if err := s.stateRepo.MarkCancelled(ctx, appointmentUUID); err != nil {
-		return err
-	}
-	updated := *appointment
-	updated.Status = domain.StatusCancelled
-	updated.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := s.eventStore.Append(ctx, domain.NewAppointmentEvent(domain.EventAppointmentCancelled, updated)); err != nil {
-		return err
-	}
-	return s.notifier.NotifyCancelled(ctx, updated)
-}
-
-func (s *AppointmentService) Reschedule(ctx context.Context, appointmentUUID string, newScheduleID int) (domain.Appointment, error) {
-	old, err := s.requirePending(ctx, appointmentUUID, "rescheduled")
-	if err != nil {
-		return domain.Appointment{}, err
-	}
-	if err := s.stateRepo.MarkRescheduled(ctx, appointmentUUID); err != nil {
-		return domain.Appointment{}, err
-	}
-	rescheduledOld := *old
-	rescheduledOld.Status = domain.StatusRescheduled
-	rescheduledOld.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	newAppointment := domain.Appointment{
-		AppointmentUUID: uuid.NewString(),
-		InsuredID:       old.InsuredID,
-		ScheduleID:      newScheduleID,
-		CountryISO:      old.CountryISO,
-		Status:          domain.StatusPending,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-		ContactEmail:    old.ContactEmail,
-	}
-	if err := s.stateRepo.Save(ctx, newAppointment); err != nil {
-		return domain.Appointment{}, err
-	}
-	if err := s.publisher.Publish(ctx, newAppointment); err != nil {
-		return domain.Appointment{}, err
-	}
-	if err := s.eventStore.Append(ctx, domain.NewAppointmentEvent(domain.EventAppointmentRescheduled, rescheduledOld)); err != nil {
-		return domain.Appointment{}, err
-	}
-	if err := s.eventStore.Append(ctx, domain.NewAppointmentEvent(domain.EventAppointmentCreated, newAppointment)); err != nil {
-		return domain.Appointment{}, err
-	}
-	if err := s.notifier.NotifyRescheduled(ctx, rescheduledOld, newAppointment); err != nil {
-		return domain.Appointment{}, err
-	}
-	return newAppointment, nil
-}
-
-func (s *AppointmentService) requirePending(ctx context.Context, appointmentUUID, action string) (*domain.Appointment, error) {
-	appointment, err := s.stateRepo.FindByID(ctx, appointmentUUID)
-	if err != nil {
-		return nil, err
-	}
-	if appointment == nil {
-		return nil, &domain.NotFoundError{Message: fmt.Sprintf("Appointment not found: %s", appointmentUUID)}
-	}
-	if appointment.Status != domain.StatusPending {
-		return nil, &domain.ConflictError{Message: fmt.Sprintf("Only a PENDING appointment can be %s", action)}
-	}
-	return appointment, nil
-}

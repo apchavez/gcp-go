@@ -12,8 +12,6 @@ type AppointmentStateRepository interface {
 	Save(ctx context.Context, a Appointment) error
 	FindByID(ctx context.Context, appointmentUUID string) (*Appointment, error)
 	MarkCompleted(ctx context.Context, appointmentUUID string) error
-	MarkCancelled(ctx context.Context, appointmentUUID string) error
-	MarkRescheduled(ctx context.Context, appointmentUUID string) error
 	ListByInsured(ctx context.Context, insuredID string, pageSize int, cursor string) (Page, error)
 }
 
@@ -23,8 +21,8 @@ type AppointmentEventStore interface {
 	FindByAppointmentID(ctx context.Context, appointmentUUID string) ([]AppointmentEvent, error)
 }
 
-// AppointmentEventPublisher mirrors IMessageBus - fans out newly created appointments
-// to per-country workers (Pub/Sub topic in this implementation).
+// AppointmentEventPublisher mirrors IMessageBus - publishes newly created appointments
+// to the worker via Pub/Sub (this implementation).
 type AppointmentEventPublisher interface {
 	Publish(ctx context.Context, a Appointment) error
 }
@@ -33,8 +31,6 @@ type AppointmentEventPublisher interface {
 // propagate to the caller - the appointment lifecycle takes precedence.
 type AppointmentNotifier interface {
 	NotifyCompleted(ctx context.Context, a Appointment) error
-	NotifyCancelled(ctx context.Context, a Appointment) error
-	NotifyRescheduled(ctx context.Context, old, updated Appointment) error
 }
 
 // AppointmentRelationalRepository persists only the final/completed appointment record

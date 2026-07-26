@@ -42,15 +42,3 @@ func (n *SendGridNotifier) NotifyCompleted(ctx context.Context, a domain.Appoint
 		fmt.Sprintf("Your appointment %s has been completed.", a.AppointmentUUID))
 	return nil
 }
-
-func (n *SendGridNotifier) NotifyCancelled(ctx context.Context, a domain.Appointment) error {
-	n.send(ctx, a, "Appointment cancelled",
-		fmt.Sprintf("Your appointment %s has been cancelled.", a.AppointmentUUID))
-	return nil
-}
-
-func (n *SendGridNotifier) NotifyRescheduled(ctx context.Context, old, updated domain.Appointment) error {
-	n.send(ctx, updated, "Appointment rescheduled",
-		fmt.Sprintf("Your appointment %s has been rescheduled to a new appointment (%s).", old.AppointmentUUID, updated.AppointmentUUID))
-	return nil
-}

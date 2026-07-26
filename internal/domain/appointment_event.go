@@ -7,10 +7,8 @@ import (
 )
 
 const (
-	EventAppointmentCreated     = "APPOINTMENT_CREATED"
-	EventAppointmentCompleted   = "APPOINTMENT_COMPLETED"
-	EventAppointmentCancelled   = "APPOINTMENT_CANCELLED"
-	EventAppointmentRescheduled = "APPOINTMENT_RESCHEDULED"
+	EventAppointmentCreated   = "APPOINTMENT_CREATED"
+	EventAppointmentCompleted = "APPOINTMENT_COMPLETED"
 )
 
 type AppointmentEvent struct {

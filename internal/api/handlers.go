@@ -5,7 +5,6 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"regexp"
@@ -121,86 +120,6 @@ func (h *Handlers) ListByInsured(w http.ResponseWriter, r *http.Request) {
 	shared.OK(w, page)
 }
 
-func (h *Handlers) CancelAppointment(w http.ResponseWriter, r *http.Request) {
-	appointmentUUID := chi.URLParam(r, "appointmentUuid")
-
-	claims, ok := auth.Authenticate(r)
-	if !ok {
-		shared.Forbidden(w, "")
-		return
-	}
-
-	appointment, err := h.svc.GetByID(r.Context(), appointmentUUID)
-	if err != nil {
-		shared.Internal(w, "")
-		return
-	}
-	if appointment == nil {
-		shared.NotFound(w, "Appointment not found: "+appointmentUUID)
-		return
-	}
-	if claims.Role == "insured" && appointment.InsuredID != claims.Sub {
-		shared.Forbidden(w, "insured can only cancel their own appointments")
-		return
-	}
-
-	if err := h.svc.Cancel(r.Context(), appointmentUUID); err != nil {
-		mapDomainError(w, err, "Internal error cancelling appointment")
-		return
-	}
-	shared.OK(w, map[string]string{"message": "Appointment cancelled", "appointmentUuid": appointmentUUID})
-}
-
-type rescheduleRequest struct {
-	NewScheduleID int `json:"newScheduleId"`
-}
-
-func (h *Handlers) RescheduleAppointment(w http.ResponseWriter, r *http.Request) {
-	appointmentUUID := chi.URLParam(r, "appointmentUuid")
-
-	body, err := io.ReadAll(r.Body)
-	var req rescheduleRequest
-	if err != nil || len(body) == 0 || json.Unmarshal(body, &req) != nil {
-		shared.Bad(w, "Request body is required")
-		return
-	}
-	if req.NewScheduleID < 1 {
-		shared.Bad(w, "newScheduleId (integer >= 1) is required")
-		return
-	}
-
-	claims, ok := auth.Authenticate(r)
-	if !ok {
-		shared.Forbidden(w, "")
-		return
-	}
-
-	appointment, err := h.svc.GetByID(r.Context(), appointmentUUID)
-	if err != nil {
-		shared.Internal(w, "")
-		return
-	}
-	if appointment == nil {
-		shared.NotFound(w, "Appointment not found: "+appointmentUUID)
-		return
-	}
-	if claims.Role == "insured" && appointment.InsuredID != claims.Sub {
-		shared.Forbidden(w, "insured can only reschedule their own appointments")
-		return
-	}
-
-	newAppointment, err := h.svc.Reschedule(r.Context(), appointmentUUID, req.NewScheduleID)
-	if err != nil {
-		mapDomainError(w, err, "Internal error rescheduling appointment")
-		return
-	}
-	shared.Accepted(w, map[string]any{
-		"message":            "Appointment rescheduled",
-		"newAppointmentUuid": newAppointment.AppointmentUUID,
-		"newScheduleId":      req.NewScheduleID,
-	})
-}
-
 // GetAppointmentHistory looks up the appointment first and checks ownership against its
 // own insuredId - unlike the pre-fix Java/Python history handlers (which derived the owner
 // from events[0].insuredId and let a zero-event appointment bypass the 403 entirely), this
@@ -246,19 +165,6 @@ func (h *Handlers) Health(healthCheck func(r *http.Request) shared.HealthStatus)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
 		_ = json.NewEncoder(w).Encode(status)
-	}
-}
-
-func mapDomainError(w http.ResponseWriter, err error, fallback string) {
-	var notFound *domain.NotFoundError
-	var conflict *domain.ConflictError
-	switch {
-	case errors.As(err, &notFound):
-		shared.NotFound(w, notFound.Message)
-	case errors.As(err, &conflict):
-		shared.Conflict(w, conflict.Message)
-	default:
-		shared.Internal(w, fallback)
 	}
 }
 

@@ -36,9 +36,7 @@ func (f *fakeStateRepo) markStatus(id, status string) error {
 	f.items[id] = a
 	return nil
 }
-func (f *fakeStateRepo) MarkCompleted(_ context.Context, id string) error   { return f.markStatus(id, domain.StatusCompleted) }
-func (f *fakeStateRepo) MarkCancelled(_ context.Context, id string) error   { return f.markStatus(id, domain.StatusCancelled) }
-func (f *fakeStateRepo) MarkRescheduled(_ context.Context, id string) error { return f.markStatus(id, domain.StatusRescheduled) }
+func (f *fakeStateRepo) MarkCompleted(_ context.Context, id string) error { return f.markStatus(id, domain.StatusCompleted) }
 func (f *fakeStateRepo) ListByInsured(_ context.Context, insuredID string, pageSize int, cursor string) (domain.Page, error) {
 	var items []domain.Appointment
 	for _, a := range f.items {
@@ -73,21 +71,11 @@ func (s *fakeEventStore) FindByAppointmentID(_ context.Context, id string) ([]do
 }
 
 type capturingNotifier struct {
-	completed, cancelled []domain.Appointment
-	rescheduledOld, rescheduledNew *domain.Appointment
+	completed []domain.Appointment
 }
 
 func (n *capturingNotifier) NotifyCompleted(_ context.Context, a domain.Appointment) error {
 	n.completed = append(n.completed, a)
-	return nil
-}
-func (n *capturingNotifier) NotifyCancelled(_ context.Context, a domain.Appointment) error {
-	n.cancelled = append(n.cancelled, a)
-	return nil
-}
-func (n *capturingNotifier) NotifyRescheduled(_ context.Context, old, updated domain.Appointment) error {
-	n.rescheduledOld = &old
-	n.rescheduledNew = &updated
 	return nil
 }
 
@@ -113,69 +101,6 @@ func TestCreate(t *testing.T) {
 	assert.Len(t, publisher.published, 1)
 	require.Len(t, eventStore.events, 1)
 	assert.Equal(t, domain.EventAppointmentCreated, eventStore.events[0].EventType)
-}
-
-func TestCancel_HappyPath(t *testing.T) {
-	svc, stateRepo, _, eventStore, notifier := newService()
-	ctx := context.Background()
-	appointment, _ := svc.Create(ctx, application.CreateInput{InsuredID: "00001", ScheduleID: 1, CountryISO: domain.CountryPE})
-
-	err := svc.Cancel(ctx, appointment.AppointmentUUID)
-
-	require.NoError(t, err)
-	assert.Equal(t, domain.StatusCancelled, stateRepo.items[appointment.AppointmentUUID].Status)
-	assert.Len(t, notifier.cancelled, 1)
-	assert.Equal(t, domain.EventAppointmentCancelled, eventStore.events[len(eventStore.events)-1].EventType)
-}
-
-func TestCancel_NotFound(t *testing.T) {
-	svc, _, _, _, _ := newService()
-	err := svc.Cancel(context.Background(), "missing")
-
-	var notFound *domain.NotFoundError
-	require.ErrorAs(t, err, &notFound)
-}
-
-func TestCancel_AlreadyCompleted_ReturnsConflict(t *testing.T) {
-	svc, stateRepo, _, _, _ := newService()
-	ctx := context.Background()
-	appointment, _ := svc.Create(ctx, application.CreateInput{InsuredID: "00001", ScheduleID: 1, CountryISO: domain.CountryPE})
-	require.NoError(t, svc.Complete(ctx, appointment.AppointmentUUID))
-	_ = stateRepo
-
-	err := svc.Cancel(ctx, appointment.AppointmentUUID)
-
-	var conflict *domain.ConflictError
-	require.ErrorAs(t, err, &conflict)
-}
-
-func TestReschedule_CreatesNewPendingAppointment(t *testing.T) {
-	svc, stateRepo, publisher, eventStore, notifier := newService()
-	ctx := context.Background()
-	old, _ := svc.Create(ctx, application.CreateInput{InsuredID: "00001", ScheduleID: 1, CountryISO: domain.CountryCL})
-
-	newAppointment, err := svc.Reschedule(ctx, old.AppointmentUUID, 99)
-
-	require.NoError(t, err)
-	assert.NotEqual(t, old.AppointmentUUID, newAppointment.AppointmentUUID)
-	assert.Equal(t, domain.StatusPending, newAppointment.Status)
-	assert.Equal(t, 99, newAppointment.ScheduleID)
-	assert.Equal(t, domain.StatusRescheduled, stateRepo.items[old.AppointmentUUID].Status)
-	assert.Len(t, publisher.published, 2) // original create + reschedule's new-appointment publish
-	assert.NotNil(t, notifier.rescheduledOld)
-	assert.NotNil(t, notifier.rescheduledNew)
-
-	var createdCount, rescheduledCount int
-	for _, e := range eventStore.events {
-		switch e.EventType {
-		case domain.EventAppointmentCreated:
-			createdCount++
-		case domain.EventAppointmentRescheduled:
-			rescheduledCount++
-		}
-	}
-	assert.Equal(t, 2, createdCount) // original + rescheduled-new
-	assert.Equal(t, 1, rescheduledCount)
 }
 
 func TestComplete_IsIdempotent(t *testing.T) {
@@ -235,27 +160,6 @@ func TestGetByID_Found(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, found)
 	assert.Equal(t, created.AppointmentUUID, found.AppointmentUUID)
-}
-
-func TestReschedule_NotFound(t *testing.T) {
-	svc, _, _, _, _ := newService()
-
-	_, err := svc.Reschedule(context.Background(), "missing", 5)
-
-	var notFound *domain.NotFoundError
-	require.ErrorAs(t, err, &notFound)
-}
-
-func TestReschedule_AlreadyCompleted_ReturnsConflict(t *testing.T) {
-	svc, _, _, _, _ := newService()
-	ctx := context.Background()
-	appointment, _ := svc.Create(ctx, application.CreateInput{InsuredID: "00001", ScheduleID: 1, CountryISO: domain.CountryPE})
-	require.NoError(t, svc.Complete(ctx, appointment.AppointmentUUID))
-
-	_, err := svc.Reschedule(ctx, appointment.AppointmentUUID, 5)
-
-	var conflict *domain.ConflictError
-	require.ErrorAs(t, err, &conflict)
 }
 
 func TestComplete_AppointmentNotFound_NoOps(t *testing.T) {

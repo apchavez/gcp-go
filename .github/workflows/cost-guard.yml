@@ -1,0 +1,72 @@
+name: Cost Guard
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # daily, 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      max_age_hours:
+        description: "Destroy the dev environment if older than this many hours"
+        required: true
+        default: "48"
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+  id-token: write
+  issues: write
+
+jobs:
+  check-and-destroy:
+    name: Check deploy age, auto-destroy if stale
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure cost-guard label exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create cost-guard --repo "${{ github.repository }}" \
+            --color FBCA04 --description "Auto-destroyed by the Cost Guard workflow" 2>/dev/null || true
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Check deploy age and trigger destroy if stale
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAX_AGE_HOURS: ${{ inputs.max_age_hours || '48' }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          CREATION=$(gcloud run services describe api --project="$GCP_PROJECT_ID" --region=us-central1 \
+            --format="value(metadata.creationTimestamp)" 2>/dev/null || true)
+
+          if [ -z "$CREATION" ]; then
+            echo "No live 'api' Cloud Run service found — nothing to do."
+            exit 0
+          fi
+
+          CREATION_EPOCH=$(date -d "$CREATION" +%s)
+          NOW_EPOCH=$(date -u +%s)
+          AGE_HOURS=$(( (NOW_EPOCH - CREATION_EPOCH) / 3600 ))
+          echo "Cloud Run service 'api' created at $CREATION, age ${AGE_HOURS}h (limit ${MAX_AGE_HOURS}h)."
+
+          if [ "$AGE_HOURS" -lt "$MAX_AGE_HOURS" ]; then
+            echo "Within allowed age, leaving it up."
+            exit 0
+          fi
+
+          echo "Deploy exceeds ${MAX_AGE_HOURS}h — triggering Destroy workflow."
+          gh workflow run destroy.yml --repo "${{ github.repository }}" \
+            -f environment=dev -f confirm=DELETE
+
+          gh issue create --repo "${{ github.repository }}" \
+            --title "Cost Guard: auto-destroyed stale dev deploy ($(date -u +%Y-%m-%d))" \
+            --body "The 'api' Cloud Run service was created at $CREATION (age ${AGE_HOURS}h, limit ${MAX_AGE_HOURS}h) and has been automatically torn down by [Cost Guard](../actions/workflows/cost-guard.yml) to avoid ongoing GCP charges. Redeploy on demand via the Deploy workflow." \
+            --label "cost-guard"

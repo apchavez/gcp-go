@@ -1,0 +1,51 @@
+package notifications
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"github.com/sendgrid/sendgrid-go"
+	"github.com/sendgrid/sendgrid-go/helpers/mail"
+
+	"github.com/apchavez/gcp-go/internal/domain"
+)
+
+// SendGridNotifier implements domain.AppointmentNotifier via SendGrid - GCP has no
+// first-party transactional-email service equivalent to AWS SES / Azure Communication
+// Services, so SendGrid is the common real-world choice for GCP-hosted apps. Best-effort:
+// errors are logged, never returned, matching the AWS/Azure siblings' notifier contract
+// (a notification failure must not fail the appointment lifecycle operation).
+type SendGridNotifier struct {
+	client *sendgrid.Client
+	from   string
+}
+
+func NewSendGridNotifier(apiKey, fromAddress string) *SendGridNotifier {
+	return &SendGridNotifier{client: sendgrid.NewSendClient(apiKey), from: fromAddress}
+}
+
+func (n *SendGridNotifier) send(ctx context.Context, a domain.Appointment, subject, body string) {
+	if a.ContactEmail == nil || *a.ContactEmail == "" {
+		return
+	}
+	from := mail.NewEmail("Clinic Scheduling", n.from)
+	to := mail.NewEmail("", *a.ContactEmail)
+	message := mail.NewSingleEmail(from, subject, to, body, "")
+	resp, err := n.client.SendWithContext(ctx, message)
+	if err != nil {
+		slog.Error("sendgrid notifier: failed to send", "subject", subject, "appointmentUuid", a.AppointmentUUID, "error", err)
+		return
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		slog.Error("sendgrid notifier: rejected", "subject", subject, "appointmentUuid", a.AppointmentUUID, "status", resp.StatusCode, "body", resp.Body)
+		return
+	}
+	slog.Info("sendgrid notifier: sent", "subject", subject, "appointmentUuid", a.AppointmentUUID)
+}
+
+func (n *SendGridNotifier) NotifyCompleted(ctx context.Context, a domain.Appointment) error {
+	n.send(ctx, a, "Appointment completed",
+		fmt.Sprintf("Your appointment %s has been completed.", a.AppointmentUUID))
+	return nil
+}

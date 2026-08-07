@@ -1,0 +1,35 @@
+package domain
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+const (
+	EventAppointmentCreated   = "APPOINTMENT_CREATED"
+	EventAppointmentCompleted = "APPOINTMENT_COMPLETED"
+)
+
+type AppointmentEvent struct {
+	EventID         string `json:"eventId" firestore:"eventId"`
+	AppointmentUUID string `json:"appointmentUuid" firestore:"appointmentUuid"`
+	EventType       string `json:"eventType" firestore:"eventType"`
+	InsuredID       string `json:"insuredId" firestore:"insuredId"`
+	ScheduleID      int    `json:"scheduleId" firestore:"scheduleId"`
+	Status          string `json:"status" firestore:"status"`
+	OccurredAt      string `json:"occurredAt" firestore:"occurredAt"`
+}
+
+// NewAppointmentEvent mirrors makeAppointmentEvent from the AWS TypeScript sibling.
+func NewAppointmentEvent(eventType string, a Appointment) AppointmentEvent {
+	return AppointmentEvent{
+		EventID:         uuid.NewString(),
+		AppointmentUUID: a.AppointmentUUID,
+		EventType:       eventType,
+		InsuredID:       a.InsuredID,
+		ScheduleID:      a.ScheduleID,
+		Status:          a.Status,
+		OccurredAt:      time.Now().UTC().Format(time.RFC3339),
+	}
+}

@@ -1,0 +1,81 @@
+swagger: "2.0"
+info:
+  title: clinic-scheduling-gateway-${environment}
+  description: >
+    Gateway proxying the `api` Cloud Run service. Adds a per-project request
+    quota, the GCP equivalent of the AWS sibling's API Gateway HTTP API
+    `throttle` (burst 50 / rate 25 rps). Cloud Endpoints quotas enforce a
+    per-minute window (no separate burst bucket), so the sustained rate
+    (25 rps) is expressed as its per-minute equivalent (1500/min) - same
+    honest approximation as the Azure sibling's `rate-limit-by-key` policy.
+  version: "1.0.0"
+schemes:
+  - https
+produces:
+  - application/json
+
+x-google-management:
+  metrics:
+    - name: "appointments-requests"
+      displayName: "Appointment requests"
+      valueType: INT64
+      metricKind: DELTA
+  quota:
+    limits:
+      - name: "appointments-requests-limit"
+        metric: "appointments-requests"
+        unit: "1/min/{project}"
+        values:
+          STANDARD: 1500
+
+x-google-backend:
+  address: ${backend_address}
+  protocol: h2
+
+paths:
+  /appointments:
+    post:
+      operationId: createAppointment
+      x-google-quota:
+        metricCosts:
+          appointments-requests: 1
+      responses:
+        "200":
+          description: OK
+  /appointments/{insuredId}:
+    get:
+      operationId: listByInsured
+      parameters:
+        - name: insuredId
+          in: path
+          required: true
+          type: string
+      x-google-quota:
+        metricCosts:
+          appointments-requests: 1
+      responses:
+        "200":
+          description: OK
+  /appointments/{appointmentUuid}/history:
+    get:
+      operationId: getAppointmentHistory
+      parameters:
+        - name: appointmentUuid
+          in: path
+          required: true
+          type: string
+      x-google-quota:
+        metricCosts:
+          appointments-requests: 1
+      responses:
+        "200":
+          description: OK
+  /health:
+    get:
+      operationId: health
+      x-google-quota:
+        metricCosts:
+          appointments-requests: 1
+      responses:
+        "200":
+          description: OK

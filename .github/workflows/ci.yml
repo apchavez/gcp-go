@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build, test and validate API
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7
+        with:
+          version: v2.12.2
+
+      - name: Set up Java (required by the Firestore emulator)
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Start Firestore emulator
+        run: |
+          curl -fsSL --proto '=https' --tlsv1.2 https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+          sudo apt-get update
+          sudo apt-get install -y google-cloud-cli-firestore-emulator
+          gcloud emulators firestore start --host-port=127.0.0.1:8080 &>/tmp/firestore-emulator.log &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8080 >/dev/null 2>&1; then
+              echo "Firestore emulator is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Firestore emulator did not become ready in time"
+          cat /tmp/firestore-emulator.log
+          exit 1
+
+      - name: Run tests
+        env:
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
+        run: go test ./... -race
+
+      - name: Compute coverage report (packages with tests only)
+        env:
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
+        run: |
+          pkgs=$(go list ./... | grep -v '/db/migration$' | grep -v '/internal/testutil$' | paste -sd,)
+          go test $(echo $pkgs | tr ',' ' ') -coverprofile=coverage.out -covermode=atomic
+
+      - name: Enforce 80% coverage gate on domain + application layers
+        run: |
+          go test ./internal/domain/... ./internal/application/... -coverprofile=core-coverage.out
+          go tool cover -func=core-coverage.out | tail -1 | awk '{ if ($3+0 < 80.0) { print "coverage " $3 " is below the 80% gate"; exit 1 } else { print "coverage " $3 " meets the 80% gate" } }'
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform fmt & validate
+        working-directory: terraform
+        run: |
+          terraform fmt -check -diff
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate OpenAPI contract
+        run: npx --yes @redocly/cli@2.45.0 lint api/openapi.yaml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: coverage.out
+          if-no-files-found: warn
+
+      - name: SonarCloud analysis
+        if: vars.SONAR_ORGANIZATION != '' && (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]')
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+

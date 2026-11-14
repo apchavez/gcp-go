@@ -104,7 +104,7 @@ jobs:
           if-no-files-found: warn
 
       - name: SonarCloud analysis
-        if: vars.SONAR_ORGANIZATION != '' && (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]')
+        if: vars.SONAR_ORGANIZATION != ''
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

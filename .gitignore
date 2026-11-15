@@ -1,0 +1,7 @@
+*.out
+*.test
+/bin/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.log
